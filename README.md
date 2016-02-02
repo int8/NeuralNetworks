@@ -4,12 +4,13 @@ The purpose of this code is mainly educational. It is the implementation of neur
 
 
 ```julia
-include("NN.jl");
+include("NeuralNetwork.jl");
+trainingData, trainingLabels, testData, testLabels = loadMnistData();
+```
 
-# Pkg.add("RDatasets") - install RDatasets if you haven't already
-# Phg.add("Gadfly") - install gadfly for visualization purposes
-using Gadfly
+After reading dataset and NN code lets build a network and train it
 
+```julia
 architecture = buildNetworkArchitectureWithOneHiddenSigmoids([784,50, 10]) # 50 neurons in a hidden layer now
 crossEntropies = Float64[]
 batchSize = 20
@@ -22,5 +23,7 @@ for i = 1:30000
      push!(crossEntropies, crossEntropyError(architecture, trainingData, trainingLabels))   
    end                 
 end   
-plot(x = 1:length(crossEntropies), y = crossEntropies, Geom.line, Guide.xlabel("iterations"), Guide.ylabel("error"))
+inferedOutputs = infer(architecture, testData)
+# test accuracy
+mean(mapslices(x -> indmax(x), inferedOutputs ,1)[:]  .==  mapslices(x -> indmax(x), full(testLabels),1)[:])
 ```
