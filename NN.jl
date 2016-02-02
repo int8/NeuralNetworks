@@ -16,23 +16,67 @@ function appendColumnOfOnes(a::Array{Float64,2})
   vcat(a,ones(1,size(a ,2)))
 end
 
-function sigmoidNeuronTransformFunction(params, input)
-  return 1.0 ./ (1.0 .+ exp(-params * appendColumnOfOnes(input)))
-end
-
-
-function linearNeuronTransformFunction(params, input)
-  return params * appendColumnOfOnes(input)
-end
-
-
-
 function exponentialNormalizer(params, input)
   denominator = sum(exp(input),1)
   return exp(input) ./ denominator
 end
 
 
+# sigmoid  layer
+function sigmoidNeuronTransformFunction(params, input)
+  return 1.0 ./ (1.0 .+ exp(-params * appendColumnOfOnes(input)))
+end
+
+function sigmoidNeuronDerivativeFunction(input)
+  return  input .* (1 - input)
+end
+
+function sigmoidComputingLayer()
+  return (sigmoidNeuronTransformFunction, sigmoidNeuronDerivativeFunction)
+end
+
+# linear layer
+function identityNeuronTransformFunction(params, input)
+   return params * appendColumnOfOnes(input)
+end
+
+function identityNeuronDerivativeFunction(input)
+  return  1
+end
+
+function linearComputingLayer()
+  return (identityNeuronTransformFunction, identityNeuronDerivativeFunction)
+end
+
+# tanh layer
+function tanhNeuronTransformFunction(params, input)
+   x = params * appendColumnOfOnes(input)
+   return (exp(x) - exp(-x)) ./ (exp(x) + exp(-x))
+end
+
+function tanhNeuronDerivativeFunction(input)
+  return  1 .- input.^2
+end
+
+function tanhComputingLayer()
+  return (tanhNeuronTransformFunction, tanhNeuronDerivativeFunction)
+end
+
+# ReLU layer
+function reluNeuronTransformFunction(params, input)
+   x = params * appendColumnOfOnes(input)
+   return x .* (x .> 0)
+end
+
+function reluNeuronDerivativeFunction(input)
+   return convert(Array{Float64,2}, input .> 0)
+end
+
+function reluComputingLayer()
+  return (reluNeuronTransformFunction, reluNeuronDerivativeFunction)
+end
+
+# end of layers functions code
 
 type FullyConnectedComputingLayer <: Layer
   inputSize::Int64
@@ -74,22 +118,12 @@ function addSoftMaxLayer(architecture::NetworkArchitecture)
 end
 
 
-function addFullyConnectedSigmoidLayer(arch::NetworkArchitecture, numberOfNeurons::Int64)
- lastNetworkLayer = arch.layers[end]
- inputSize = lastNetworkLayer.numberOfNeurons
- #derivative added
- sigmoidLayer = FullyConnectedComputingLayer(inputSize, numberOfNeurons, sigmoidNeuronTransformFunction, x -> x .* (1 - x))
- push!(arch.layers, sigmoidLayer)
-end
-
-
-function addFullyConnectedLinearLayer(architecture::NetworkArchitecture, numberOfNeurons::Int64)
+function addFullyConnectedLayer(architecture::NetworkArchitecture, numberOfNeurons::Int64, functionsPair::(Function,Function))
  lastNetworkLayer = architecture.layers[end]
  inputSize = lastNetworkLayer.numberOfNeurons
- linearLayer = FullyConnectedComputingLayer(inputSize, numberOfNeurons, linearNeuronTransformFunction, x -> 1)
- push!(architecture.layers, linearLayer)
+ layer = FullyConnectedComputingLayer(inputSize, numberOfNeurons, functionsPair[1], functionsPair[2])
+ push!(architecture.layers, layer)
 end
-
 
 function infer(architecture::NetworkArchitecture, input)
   currentResult = input
@@ -159,22 +193,13 @@ function updateParameters!(unit::BackPropagationBatchLearningUnit, learningRate)
   end
 end
 
-# helper to build SoftMax architecture
-function buildNetworkArchitectureSoftMax(sizes)
-  firstLayer = FullyConnectedComputingLayer(sizes[1], sizes[2], linearNeuronTransformFunction, x -> 1);
-  architecture = NetworkArchitecture(firstLayer);
-  addSoftMaxLayer(architecture)
-  return(architecture)
-end
+function buildNetworkArchitecture(inputSize, layersSizes, layersFunctions::Array{Function})
 
-# helper to build an architecture with hidden sigmoid layers
-function buildNetworkArchitectureWithOneHiddenSigmoids(sizes)
-  firstLayer = FullyConnectedComputingLayer(sizes[1], sizes[2], sigmoidNeuronTransformFunction, x -> x .* (1 - x));
+  firstLayer = FullyConnectedComputingLayer(inputSize, layersSizes[1], layersFunctions[1]()[1], layersFunctions[1]()[2]);
   architecture = NetworkArchitecture(firstLayer);
-  for i in 3:(length(sizes)-1)
-    addFullyConnectedSigmoidLayer(architecture, sizes[i]);
+  for i in 2:(length(layersSizes))
+    addFullyConnectedLayer(architecture, layersSizes[i], layersFunctions[i]());
   end
-  addFullyConnectedLinearLayer(architecture, sizes[end]);
   addSoftMaxLayer(architecture)
   return(architecture)
 end
