@@ -4,7 +4,7 @@ The purpose of this code is mainly educational. It is the implementation of neur
 
 
 ```julia
-include("NeuralNetwork.jl");
+include("NN.jl");
 
 # Pkg.add("RDatasets") - install RDatasets if you haven't already
 # Phg.add("Gadfly") - install gadfly for visualization purposes
