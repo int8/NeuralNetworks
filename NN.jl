@@ -1,5 +1,7 @@
 using MNIST
 abstract Layer
+abstract Optimizer
+abstract Parameters
 
 function loadMnistData()
 
@@ -17,10 +19,10 @@ function appendColumnOfOnes(a::Array{Float64,2})
 end
 
 function exponentialNormalizer(params, input)
-  denominator = sum(exp(input),1)
-  return exp(input) ./ denominator
+  log_nominator = input
+  log_denominator = maximum(input,1) .+ log(sum(exp(input .- maximum(input,1)),1))
+  return exp(log_nominator .- log_denominator)
 end
-
 
 # sigmoid  layer
 function sigmoidNeuronTransformFunction(params, input)
@@ -51,7 +53,7 @@ end
 # tanh layer
 function tanhNeuronTransformFunction(params, input)
    x = params * appendColumnOfOnes(input)
-   return (exp(x) - exp(-x)) ./ (exp(x) + exp(-x))
+   return tanh(x)
 end
 
 function tanhNeuronDerivativeFunction(input)
@@ -91,7 +93,6 @@ type FullyConnectedComputingLayer <: Layer
   end
 end
 
-
 type SoftMaxLayer <: Layer
   numberOfNeurons::Int64
   parameters::Any
@@ -109,14 +110,12 @@ type NetworkArchitecture
   end
 end
 
-
 function addSoftMaxLayer(architecture::NetworkArchitecture)
  lastNetworkLayer = architecture.layers[end]
  numberOfNeurons = lastNetworkLayer.numberOfNeurons
  softMaxLayer = SoftMaxLayer(numberOfNeurons)
  push!(architecture.layers, softMaxLayer)
 end
-
 
 function addFullyConnectedLayer(architecture::NetworkArchitecture, numberOfNeurons::Int64, functionsPair::(Function,Function))
  lastNetworkLayer = architecture.layers[end]
@@ -140,7 +139,6 @@ function crossEntropyError(architecture::NetworkArchitecture, input, labels)
  return -mean(log(probabilities))
 end
 
-
 type BackPropagationBatchLearningUnit
   networkArchitecture::NetworkArchitecture
   dataBatch::Array{Float64,2}
@@ -155,7 +153,6 @@ type BackPropagationBatchLearningUnit
   end
 end
 
-
 function forwardPass!(learningUnit::BackPropagationBatchLearningUnit)
   currentResult = learningUnit.dataBatch
   for i in 1:length(learningUnit.networkArchitecture.layers)
@@ -164,7 +161,6 @@ function forwardPass!(learningUnit::BackPropagationBatchLearningUnit)
      learningUnit.outputs[i]  = currentResult
   end
 end
-
 
 function backwardPass!(learningUnit::BackPropagationBatchLearningUnit)
 
@@ -177,21 +173,208 @@ function backwardPass!(learningUnit::BackPropagationBatchLearningUnit)
       learningUnit.deltas[end-i] = currentLayer.derivative(learningUnit.outputs[end-i]) .* (transpose(higherLayer.parameters[:,(1:end-1)]) * learningUnit.deltas[end - i + 1])
   end
 end
+#--------------------------------------------------------------#
+# Stochastic Gradient Descent Optimizer
+type SGDParameters <: Parameters
+  learningRate::Float64
+end
 
-function updateParameters!(unit::BackPropagationBatchLearningUnit, learningRate)
-  forwardPass!(unit)
-  backwardPass!(unit)
-  derivativeW= (unit.deltas[1] * transpose(unit.dataBatch)) / size(unit.dataBatch,2);
-  unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] - learningRate * derivativeW;
-  derivativeB = mean(unit.deltas[1],2);
-  unit.networkArchitecture.layers[1].parameters[:,end] =  unit.networkArchitecture.layers[1].parameters[:,end] - learningRate * derivativeB;
-  for i in 2:(length(unit.networkArchitecture.layers) - 1)
-    derivativeW = (unit.deltas[i] * transpose(unit.outputs[i-1])) / size(unit.dataBatch,2);
-    unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] - learningRate * derivativeW;
-    derivativeB = mean(unit.deltas[i],2);
-    unit.networkArchitecture.layers[i].parameters[:,end] =  unit.networkArchitecture.layers[i].parameters[:,end] - learningRate * derivativeB;
+type SGDOptimizer <: Optimizer
+  params::Parameters
+  updateRule!::Function
+  function SGDOptimizer(learningRate::Float64)
+    return new(SGDParameters(learningRate), sgdUpdateFunction)
   end
 end
+
+function sgdUpdateFunction(unit::BackPropagationBatchLearningUnit, params::Parameters)
+  forwardPass!(unit)
+  backwardPass!(unit)
+  derivativeW = (unit.deltas[1] * transpose(unit.dataBatch)) / size(unit.dataBatch,2);
+  derivativeB = mean(unit.deltas[1],2)
+  unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] - params.learningRate * derivativeW
+  unit.networkArchitecture.layers[1].parameters[:,end] =  unit.networkArchitecture.layers[1].parameters[:,end] - params.learningRate * derivativeB
+  for i in 2:(length(unit.networkArchitecture.layers) - 1)
+    derivativeW = (unit.deltas[i] * transpose(unit.outputs[i-1])) / size(unit.dataBatch,2);
+    derivativeB = mean(unit.deltas[i],2);
+    unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] - params.learningRate * derivativeW
+    unit.networkArchitecture.layers[i].parameters[:,end] = unit.networkArchitecture.layers[i].parameters[:,end] - params.learningRate *  derivativeB
+  end
+end
+
+
+#--------------------------------------------------------------#
+# Stochastic Gradient Descent (+ Momentum) Optimizer
+
+type MomentumParameters <: Parameters
+  learningRate::Float64
+  gamma::Float64
+  velocity::Array{Array{Float64,2}}
+end
+
+type MomentumOptimizer <: Optimizer
+  params::Parameters
+  updateRule!::Function
+
+  function MomentumOptimizer(learningRate::Float64, gamma::Float64, architecture::NetworkArchitecture)
+    velocity = [ zeros(size(x.parameters)) for x in architecture.layers[1:end-1] ]
+    return new(MomentumParameters(learningRate, gamma, velocity), momentumUpdateFunction!)
+  end
+end
+
+function momentumUpdateFunction!(unit::BackPropagationBatchLearningUnit, params::Parameters)
+  forwardPass!(unit)
+  backwardPass!(unit)
+  derivativeW = (unit.deltas[1] * transpose(unit.dataBatch)) / size(unit.dataBatch,2);
+  derivativeB = mean(unit.deltas[1],2)
+  params.velocity[1][:,1:(end-1)] = params.gamma * params.velocity[1][:,1:(end-1)] +  derivativeW
+  params.velocity[1][:,end] = params.gamma * params.velocity[1][:,end] + derivativeB
+  unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] -  params.learningRate *  params.velocity[1][:,1:(end-1)]
+  unit.networkArchitecture.layers[1].parameters[:,end] =  unit.networkArchitecture.layers[1].parameters[:,end] -  params.learningRate * params.velocity[1][:,end]
+  for i in 2:(length(unit.networkArchitecture.layers) - 1)
+    derivativeW = (unit.deltas[i] * transpose(unit.outputs[i-1])) / size(unit.dataBatch,2);
+    derivativeB = mean(unit.deltas[i],2);
+    params.velocity[i][:,1:(end-1)] = params.gamma * params.velocity[i][:,1:(end-1)] +  derivativeW
+    params.velocity[i][:,end] = params.gamma * params.velocity[i][:,end] + derivativeB
+    unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] - params.learningRate * params.velocity[i][:,1:(end-1)]
+    unit.networkArchitecture.layers[i].parameters[:,end] = unit.networkArchitecture.layers[i].parameters[:,end] - params.learningRate * params.velocity[i][:,end]
+  end
+end
+
+#--------------------------------------------------------------#
+# Adagrad Optimizer
+type AdaGradParameters <: Parameters
+  learningRate::Float64
+  G::Array{Array{Float64,2}}
+end
+
+type AdaGradOptimizer <: Optimizer
+  params::Parameters
+  updateRule!::Function
+
+  function AdaGradOptimizer (learningRate::Float64, architecture::NetworkArchitecture)
+    G = [ zeros(size(x.parameters)) for x in architecture.layers[1:end-1] ]
+    return new(AdaGradParameters(learningRate, G), adagradUpdateFunction!)
+  end
+end
+
+function adagradUpdateFunction!(unit::BackPropagationBatchLearningUnit, params::Parameters)
+  forwardPass!(unit)
+  backwardPass!(unit)
+  derivativeW = (unit.deltas[1] * transpose(unit.dataBatch)) / size(unit.dataBatch,2);
+  derivativeB = mean(unit.deltas[1],2)
+  params.G[1][:,1:(end-1)] = params.G[1][:,1:(end-1)] +  (derivativeW.^2)
+  params.G[1][:,end] = params.G[1][:,end] + (derivativeB.^2)
+  unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] - (params.learningRate ./ ( 1e-6 + sqrt(params.G[1][:,1:(end-1)]))).* derivativeW
+  unit.networkArchitecture.layers[1].parameters[:,end] =  unit.networkArchitecture.layers[1].parameters[:,end]- (params.learningRate ./ ( 1e-6 + sqrt(params.G[1][:,end]))).* derivativeB
+  for i in 2:(length(unit.networkArchitecture.layers) - 1)
+    derivativeW = (unit.deltas[i] * transpose(unit.outputs[i-1])) / size(unit.dataBatch,2);
+    derivativeB = mean(unit.deltas[i],2);
+    params.G[i][:,1:(end-1)] = params.G[i][:,1:(end-1)] +  (derivativeW.^2)
+    params.G[i][:,end] = params.G[i][:,end] + (derivativeB.^2)
+    unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] - (params.learningRate ./ ( 1e-6 + sqrt(params.G[i][:,1:(end-1)]))) .* derivativeW
+    unit.networkArchitecture.layers[i].parameters[:,end] =  unit.networkArchitecture.layers[i].parameters[:,end] -  (params.learningRate ./( 1e-6 + sqrt(params.G[i][:,end]))) .* derivativeB
+  end
+end
+
+#--------------------------------------------------------------#
+
+type AdaDeltaParameters <: Parameters
+  rho::Float64
+  EG::Array{Array{Float64,2}}
+  EDeltaX::Array{Array{Float64,2}}
+end
+
+type AdaDeltaOptimizer <: Optimizer
+  params::Parameters
+  updateRule!::Function
+
+  function AdaDeltaOptimizer (rho::Float64, architecture::NetworkArchitecture)
+    EG = [ zeros(size(x.parameters)) for x in architecture.layers[1:end-1] ]
+    EDeltaX = [ zeros(size(x.parameters)) for x in architecture.layers[1:end-1] ]
+    return new(AdaDeltaParameters(rho, EG, EDeltaX), adadeltaUpdateFunction!)
+  end
+end
+
+function adadeltaUpdateFunction!(unit::BackPropagationBatchLearningUnit, params::Parameters)
+  forwardPass!(unit)
+  backwardPass!(unit)
+  derivativeW = (unit.deltas[1] * transpose(unit.dataBatch)) / size(unit.dataBatch,2);
+  derivativeB = mean(unit.deltas[1],2)
+  params.EG[1][:,1:(end-1)] = params.rho * params.EG[1][:,1:(end-1)] +  (1-params.rho) * (derivativeW.^2)
+  params.EG[1][:,end] = params.rho * params.EG[1][:,end] + (1-params.rho) * (derivativeB.^2)
+  updateW = - ((sqrt(params.EDeltaX[1][:,1:(end-1)] + 1e-6)) ./ (sqrt(params.EG[1][:,1:(end-1)] + 1e-6))) .* derivativeW;
+  updateB = - ((sqrt(params.EDeltaX[1][:,end] + 1e-6)) ./ (sqrt(params.EG[1][:,end] + 1e-6))) .* derivativeB;
+  unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] + updateW;
+  unit.networkArchitecture.layers[1].parameters[:,end] =  unit.networkArchitecture.layers[1].parameters[:,end] + updateB;
+  params.EDeltaX[1][:,1:(end-1)] = params.rho * params.EDeltaX[1][:,1:(end-1)] +  (1-params.rho) * (updateW.^2)
+  params.EDeltaX[1][:,end] = params.rho * params.EDeltaX[1][:,end] + (1-params.rho) * (updateB.^2)
+
+  for i in 2:(length(unit.networkArchitecture.layers) - 1)
+    derivativeW = (unit.deltas[i] * transpose(unit.outputs[i-1])) / size(unit.dataBatch,2);
+    derivativeB = mean(unit.deltas[i],2);
+    params.EG[i][:,1:(end-1)] = params.rho * params.EG[i][:,1:(end-1)] +  (1-params.rho) * (derivativeW.^2)
+    params.EG[i][:,end] = params.rho * params.EG[i][:,end] + (1-params.rho) * (derivativeB.^2)
+    updateW = - ((sqrt(params.EDeltaX[i][:,1:(end-1)] + 1e-6)) ./ (sqrt(params.EG[i][:,1:(end-1)] + 1e-6))) .* derivativeW;
+    updateB = - ((sqrt(params.EDeltaX[i][:,end] + 1e-6)) ./ (sqrt(params.EG[i][:,end] + 1e-6))) .* derivativeB;
+    unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] + updateW;
+    unit.networkArchitecture.layers[i].parameters[:,end] =  unit.networkArchitecture.layers[i].parameters[:,end] + updateB;
+    params.EDeltaX[i][:,1:(end-1)] = params.rho * params.EDeltaX[i][:,1:(end-1)] +  (1-params.rho) * (updateW.^2)
+    params.EDeltaX[i][:,end] = params.rho * params.EDeltaX[i][:,end] + (1-params.rho) * (updateB.^2)
+  end
+end
+
+
+type AdamParameters <: Parameters
+  i::Int64
+  alpha::Float64
+  beta1::Float64
+  beta2::Float64
+  M::Array{Array{Float64,2}}
+  V::Array{Array{Float64,2}}
+end
+
+
+type AdamOptimizer <: Optimizer
+  params::Parameters
+  updateRule!::Function
+
+  function AdamOptimizer (i::Int64, alpha::Float64, beta1::Float64, beta2::Float64, architecture::NetworkArchitecture)
+    M = [ zeros(size(x.parameters)) for x in architecture.layers[1:end-1] ]
+    V = [ zeros(size(x.parameters)) for x in architecture.layers[1:end-1] ]
+    return new(AdamParameters(i, alpha, beta1, beta2, M, V), adamUpdateFunction!)
+  end
+end
+
+function adamUpdateFunction!(unit::BackPropagationBatchLearningUnit, params::Parameters)
+  forwardPass!(unit)
+  backwardPass!(unit)
+  params.i += 1
+  derivativeW = (unit.deltas[1] * transpose(unit.dataBatch)) / size(unit.dataBatch,2);
+  derivativeB = mean(unit.deltas[1],2)
+  params.M[1][:,1:(end-1)] = params.beta1 * params.M[1][:,1:(end-1)] +  (1-params.beta1) * (derivativeW)
+  params.M[1][:,end] = params.beta1 * params.M[1][:,end] + (1-params.beta1) * (derivativeB)
+  params.V[1][:,1:(end-1)] = params.beta2 * params.V[1][:,1:(end-1)] +  (1-params.beta2) * (derivativeW.^2)
+  params.V[1][:,end] = params.beta2 * params.V[1][:,end] + (1-params.beta2) * (derivativeB.^2)
+  updateW = -((params.M[1][:,1:(end-1)]) ./ (1-params.beta1)) ./ (sqrt(params.V[1][:,1:(end-1)] ./ (1-params.beta2)) + 1e-8)
+  updateB = -((params.M[1][:,end]) ./ (1-params.beta1)) ./ (sqrt(params.V[1][:,end] ./ (1-params.beta2)) + 1e-8)
+  unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[1].parameters[:,1:(end-1)] + params.alpha * updateW;
+  unit.networkArchitecture.layers[1].parameters[:,end] =  unit.networkArchitecture.layers[1].parameters[:,end] + params.alpha * updateB;
+
+  for i in 2:(length(unit.networkArchitecture.layers) - 1)
+    derivativeW = (unit.deltas[i] * transpose(unit.outputs[i-1])) / size(unit.dataBatch,2);
+    derivativeB = mean(unit.deltas[i],2);
+    params.M[i][:,1:(end-1)] = params.beta1 * params.M[i][:,1:(end-1)] +  (1-params.beta1) * (derivativeW)
+    params.M[i][:,end] = params.beta1 * params.M[i][:,end] + (1-params.beta1) * (derivativeB)
+    params.V[i][:,1:(end-1)] = params.beta2 * params.V[i][:,1:(end-1)] +  (1-params.beta2) * (derivativeW.^2)
+    params.V[i][:,end] = params.beta2 * params.V[i][:,end] + (1-params.beta2) * (derivativeB.^2)
+    updateW = -((params.M[i][:,1:(end-1)]) ./ (1-params.beta1^params.i)) ./ (sqrt(params.V[i][:,1:(end-1)] ./ (1-params.beta2^params.i)) + 1e-8)
+    updateB = -((params.M[i][:,end]) ./ (1-params.beta1^params.i)) ./ (sqrt(params.V[i][:,end] ./ (1-params.beta2^params.i)) + 1e-8)
+    unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] = unit.networkArchitecture.layers[i].parameters[:,1:(end-1)] + params.alpha *  updateW;
+    unit.networkArchitecture.layers[i].parameters[:,end] =  unit.networkArchitecture.layers[i].parameters[:,end] + params.alpha * updateB;
+  end
+end
+
 
 function buildNetworkArchitecture(inputSize, layersSizes, layersFunctions::Array{Function})
 
