@@ -1,4 +1,3 @@
-
 # NeuralNetworks
 
 The purpose of this code is mainly educational. It is the implementation of neural network with cross entropy error function for the problem of multi-label classification.
@@ -20,7 +19,7 @@ trainingData, trainingLabels, testData, testLabels = loadMnistData();
 
 Now, to train the neural network with one hidden layer of tanh followed by fully connected linear layer with softmax at the end (using Adam) try:
 ```julia
-architecture = buildNetworkArchitecture(784, [10], [linearComputingLayer])
+architecture = buildNetworkArchitecture(784, [50, 10], [tanhComputingLayer, linearComputingLayer])
 adam = AdamOptimizer(0, 0.002, 0.9, .999, architecture)
 crossEntropiesAdam = Float64[]
 batchSize = 128
@@ -34,9 +33,9 @@ for i = 1:40000
    end
 end
 ```
-Or, to train the neural network with one hidden layer of ReLU followed by fully connected linear layer with softmax at the end (using Momentum) try:
+Or, to train the neural network with one hidden layer of sigmoid followed by fully connected linear layer with softmax at the end (using Momentum) try:
 ```julia
-architecture = buildNetworkArchitecture(784, [10], [linearComputingLayer])
+architecture = buildNetworkArchitecture(784, [50,10], [sigmoidComputingLayer, linearComputingLayer])
 momentum = MomentumOptimizer(0.05, 0.9, architecture)
 crossEntropiesMomentum = Float64[]
 batchSize = 128
@@ -50,3 +49,8 @@ for i = 1:40000
    end
 end
 ```
+
+Alternative optimization techniques are: ```AdaGradOptimizer, AdaDeltaOptimizer, SGDOptimizer ```. The types of layer that has been implemented include:
+``` reluComputingLayer, tanhComputingLayer, sigmoidComputingLayer, linearComputingLayer ```
+
+Please visit http://int8.io/comparison-of-optimization-techniques-stochastic-gradient-descent-momentum-adagrad-and-adadelta for details (+ to see some experiments)
