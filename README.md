@@ -3,13 +3,22 @@
 
 The purpose of this code is mainly educational. It is the implementation of neural network with cross entropy error function for the problem of multi-label classification.
 
+Quick example of how to use the code:
+
+```julia
+# add mnist package if not added yet
+# Pkg.add("MNIST")
+```
+
+Include the code and load the datasets.
 
 ```julia
 include("NeuralNetwork.jl");
+# load MNIST datasets
 trainingData, trainingLabels, testData, testLabels = loadMnistData();
 ```
 
-to train the neural network with one hidden layer of tanh followed by fully connected linear layer with softmax at the end (using Adam) try:
+Now, to train the neural network with one hidden layer of tanh followed by fully connected linear layer with softmax at the end (using Adam) try:
 ```julia
 architecture = buildNetworkArchitecture(784, [10], [linearComputingLayer])
 adam = AdamOptimizer(0, 0.002, 0.9, .999, architecture)
@@ -25,14 +34,13 @@ for i = 1:40000
    end
 end
 ```
-to train the neural network with one hidden layer of ReLU followed by fully connected linear layer with softmax at the end (using Momentum) try:
+Or, to train the neural network with one hidden layer of ReLU followed by fully connected linear layer with softmax at the end (using Momentum) try:
 ```julia
 architecture = buildNetworkArchitecture(784, [10], [linearComputingLayer])
 momentum = MomentumOptimizer(0.05, 0.9, architecture)
 crossEntropiesMomentum = Float64[]
 batchSize = 128
-for i = 1:40000
-   println(i)
+for i = 1:40000   
    minibatch = collect((batchSize*i):(batchSize*i +batchSize)) % size(trainingLabels,2) + 1 # take next 20 elements
    learningUnit = BackPropagationBatchLearningUnit(architecture, trainingData[:,minibatch ],
                                                   trainingLabels[:,minibatch]);
